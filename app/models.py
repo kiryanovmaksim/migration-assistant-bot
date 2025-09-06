@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import enum
+from datetime import datetime
 from sqlalchemy import (
     String,
     Integer,
@@ -12,8 +13,6 @@ from sqlalchemy import (
     Enum,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
-
 from .db import Base
 
 
@@ -50,8 +49,8 @@ class User(Base):
     fio: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role_id: Mapped[int | None] = mapped_column(ForeignKey("roles.id"))
-    is_active: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped = mapped_column(DateTime(timezone=True), server_default=func.now())
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     role: Mapped["Role"] = relationship()
 
@@ -64,14 +63,15 @@ class Meeting(Base):
     description: Mapped[str | None] = mapped_column(Text(), nullable=True)
     department: Mapped[str | None] = mapped_column(String(128), nullable=True)
     country: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    deadline_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[MeetingStatus] = mapped_column(Enum(MeetingStatus), default=MeetingStatus.draft)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     questions: Mapped[list["Question"]] = relationship(
         back_populates="meeting",
         cascade="all, delete-orphan",
+        order_by="Question.order_idx"
     )
 
 
@@ -109,7 +109,7 @@ class Response(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     meeting_id: Mapped[int] = mapped_column(ForeignKey("meetings.id"))
-    submitted_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="draft")  # draft | submitted
 
 

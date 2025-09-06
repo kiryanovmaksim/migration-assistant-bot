@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 from datetime import datetime
-
+from sqlalchemy.orm import selectinload  # ⬅️ добавь импорт
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -84,9 +84,18 @@ async def list_open_meetings(db: AsyncSession) -> Sequence[Meeting]:
 
 
 async def get_meeting(db: AsyncSession, meeting_id: int) -> Optional[Meeting]:
-    res = await db.execute(select(Meeting).where(Meeting.id == meeting_id))
-    m = res.scalar_one_or_none()
-    # подгружаем вопросы по порядку (лениво, без joinload; порядок используем в боте)
+    res = await db.execute(
+        select(Meeting)
+        .where(Meeting.id == meeting_id)
+        .options(
+            # заранее подгружаем вопросы и их опции
+            selectinload(Meeting.questions).options(
+                selectinload(Question.options)
+            )
+        )
+    )
+    # res.unique() важно при selectinload, чтобы убрать дубликаты строк
+    m = res.unique().scalar_one_or_none()
     if m and m.questions:
         m.questions.sort(key=lambda q: (q.order_idx, q.id))
     return m

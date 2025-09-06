@@ -18,6 +18,7 @@ from loguru import logger
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
     KeyboardButton,
     InputFile,
 )
@@ -32,7 +33,7 @@ from telegram.ext import (
 from .config import settings
 from .db import init_db, SessionLocal
 from . import repo
-from .models import MeetingStatus
+from .models import MeetingStatus, QuestionType
 from .fsm import start_fill, get_state, advance, clear_state
 from .utils import parse_meeting_form, is_admin
 
@@ -56,12 +57,52 @@ def admin_only(func: Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[Non
     return wrapper
 
 
+# ---------------------------- helpers -----------------------------
+
+def _multi_key(meeting_id: int, qid: int) -> str:
+    return f"multi_sel:{meeting_id}:{qid}"
+
+
+async def _ask_question(update: Update, meeting, idx: int, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает вопрос и рисует нужную клавиатуру."""
+    q = meeting.questions[idx]
+    kb = None
+
+    if q.type in (QuestionType.choice, QuestionType.multi) and q.options:
+        rows = [[KeyboardButton(o.value)] for o in q.options]  # одна кнопка — один вариант
+        if q.type == QuestionType.multi:
+            # покажем текущие выбранные (если есть)
+            sel = context.user_data.get(_multi_key(meeting.id, q.id), [])
+            suffix = f"\n(выбрано: {', '.join(sel)})" if sel else ""
+            rows.append([KeyboardButton("Готово")])
+            await update.message.reply_text(
+                q.text + suffix,
+                reply_markup=ReplyKeyboardMarkup(rows, resize_keyboard=True),
+            )
+            return
+        kb = ReplyKeyboardMarkup(rows, resize_keyboard=True)
+
+    elif q.type == QuestionType.bool:
+        kb = ReplyKeyboardMarkup([[KeyboardButton("Да"), KeyboardButton("Нет")]], resize_keyboard=True)
+
+    # по умолчанию — без клавиатуры
+    await update.message.reply_text(q.text, reply_markup=kb or ReplyKeyboardRemove())
+
+
+def _norm_bool(v: str) -> str | None:
+    s = (v or "").strip().lower()
+    if s in ("да", "yes", "y", "true", "1"):
+        return "true"
+    if s in ("нет", "no", "n", "false", "0"):
+        return "false"
+    return None
+
+
 # ---------------------------- user commands -----------------------------
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает открытые встречи и предлагает выбрать."""
     uid = update.effective_user.id if update.effective_user else 0
-    # регистрируем пользователя (если нет)
     async with SessionLocal() as db:
         await repo.get_or_create_user(db, uid, fio=update.effective_user.full_name if update.effective_user else None)
         meetings = await repo.list_open_meetings(db)
@@ -89,29 +130,24 @@ async def my_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 @admin_only
 async def new_meeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Запрашивает форму данных для новой встречи одной строкой."""
     await update.message.reply_text(
         "Отправьте данные встречи одной строкой:\n"
-        "`Title | Description | Department | Country | 2025-09-30`",
-        parse_mode="Markdown",
+        "Title | Description | Department | Country | 2025-09-30"
     )
     context.user_data["await_new_meeting"] = True
 
 
 @admin_only
 async def add_q_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Запрашивает строку для добавления вопроса к встрече."""
     await update.message.reply_text(
         "Формат: meeting_id | type(text|choice|multi|bool|int) | order | required(0/1) | question text | options(csv)\n"
-        "Пример: `1|choice|0|1|Какой формат? | Онлайн, Офлайн`",
-        parse_mode="Markdown",
+        "Пример: 1|choice|0|1|Какой формат? | Онлайн, Офлайн"
     )
     context.user_data["await_add_q"] = True
 
 
 @admin_only
 async def open_meeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Открывает встречу для ответов."""
     try:
         mid = int(context.args[0])
     except Exception:
@@ -124,7 +160,6 @@ async def open_meeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 @admin_only
 async def close_meeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Закрывает встречу."""
     try:
         mid = int(context.args[0])
     except Exception:
@@ -146,7 +181,7 @@ async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 # ---------------------------- text handler (user flow) -----------------------------
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Общий обработчик текстов: админ-формы + прохождение анкеты."""
+    """Админ-формы + прохождение анкеты с типами вопросов."""
     if not update.message or not update.message.text:
         return
 
@@ -197,7 +232,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if not meeting.questions:
                 await update.message.reply_text("Для встречи ещё не добавлены вопросы.")
                 return
-            await update.message.reply_text(meeting.questions[0].text)
+            await _ask_question(update, meeting, 0, context)
         return
 
     # --- user: ответы по текущей анкете ---
@@ -214,20 +249,78 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             user = await repo.get_or_create_user(db, update.effective_user.id)
             resp = await repo.get_or_create_response(db, user.id, meeting.id)
 
-            # текущий вопрос
             q = meeting.questions[st.current_q_idx]
-            await repo.save_answer(db, resp.id, q.id, text)
+            val = text
 
-            # след. вопрос или завершение
-            if st.current_q_idx + 1 < len(meeting.questions):
-                advance(update.effective_user.id)
-                q_next = meeting.questions[st.current_q_idx + 1]
-                await update.message.reply_text(q_next.text)
-            else:
-                await repo.submit_response(db, resp.id)
-                clear_state(update.effective_user.id)
-                await update.message.reply_text("Спасибо! Анкета отправлена.")
-        return
+            # --- Валидации по типам ---
+            if q.type == QuestionType.int:
+                if not val.isdigit():
+                    await update.message.reply_text("Нужно число. Повторите ответ.")
+                    return  # остаёмся на том же вопросе
+
+            elif q.type == QuestionType.bool:
+                norm = _norm_bool(val)
+                if norm is None:
+                    await update.message.reply_text("Ответьте Да/Нет.")
+                    return
+                val = norm
+
+            elif q.type == QuestionType.choice:
+                if q.options:
+                    allowed = {o.value for o in q.options}
+                    if val not in allowed:
+                        await update.message.reply_text("Пожалуйста, выберите вариант из кнопок.")
+                        return
+
+            elif q.type == QuestionType.multi:
+                # Множественный выбор: копим в context.user_data, сохраняем при "Готово"
+                key = _multi_key(meeting.id, q.id)
+                sel: list[str] = context.user_data.get(key, [])
+                if val.lower() == "готово":
+                    if not sel:
+                        await update.message.reply_text("Выберите хотя бы один вариант и нажмите «Готово».")
+                        return
+                    val = ", ".join(sel)
+                    # сохраняем единым ответом и очищаем буфер
+                    await repo.save_answer(db, resp.id, q.id, val)
+                    context.user_data.pop(key, None)
+
+                    # переход дальше
+                    next_idx = st.current_q_idx + 1
+                    if next_idx < len(meeting.questions):
+                        advance(update.effective_user.id)
+                        await _ask_question(update, meeting, next_idx, context)
+                    else:
+                        await repo.submit_response(db, resp.id)
+                        clear_state(update.effective_user.id)
+                        await update.message.reply_text("Спасибо! Анкета отправлена.", reply_markup=ReplyKeyboardRemove())
+                    return
+                else:
+                    # Проверяем, что это допустимый вариант
+                    allowed = [o.value for o in q.options] if q.options else []
+                    if val not in allowed:
+                        await update.message.reply_text("Пожалуйста, выберите вариант из кнопок или нажмите «Готово».")
+                        return
+                    if val not in sel:
+                        sel.append(val)
+                        context.user_data[key] = sel
+                    # остаёмся на том же вопросе и показываем текущий список
+                    await _ask_question(update, meeting, st.current_q_idx, context)
+                    return
+
+            # Для всех типов кроме multi: сохраняем немедленно и двигаемся дальше
+            if q.type != QuestionType.multi:
+                await repo.save_answer(db, resp.id, q.id, val)
+
+                next_idx = st.current_q_idx + 1
+                if next_idx < len(meeting.questions):
+                    advance(update.effective_user.id)
+                    await _ask_question(update, meeting, next_idx, context)
+                else:
+                    await repo.submit_response(db, resp.id)
+                    clear_state(update.effective_user.id)
+                    await update.message.reply_text("Спасибо! Анкета отправлена.", reply_markup=ReplyKeyboardRemove())
+            return
 
     # по умолчанию
     await update.message.reply_text("Команда не распознана. Используйте /start.")
