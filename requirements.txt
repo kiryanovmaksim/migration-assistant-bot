@@ -1,0 +1,9 @@
+python-telegram-bot==21.*
+sqlalchemy~=2.0.43
+aiosqlite
+pydantic~=2.11.7
+flask
+loguru~=0.7.3
+python-dotenv~=1.1.1
+
+dotenv~=0.9.9

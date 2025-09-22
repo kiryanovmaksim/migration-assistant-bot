@@ -1,6 +1,5 @@
 # run.py
 import sys
-import asyncio
 from sqlalchemy import delete
 
 from app.bot import build_app

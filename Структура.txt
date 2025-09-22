@@ -1,0 +1,28 @@
+/home/kiryanovmaksim/teammeet_bot/          # корень проекта
+│
+├── bot/                                    # код бота (твоя текущая логика)
+│   ├── app/                                # основные модули
+│   │   ├── bot.py                          # команды, обработчики, маршрутизация
+│   │   ├── config.py                       # загрузка токена, админов, DSN БД
+│   │   ├── db.py                           # инициализация БД
+│   │   ├── fsm.py                          # конечный автомат для анкет
+│   │   ├── models.py                       # ORM-модели SQLAlchemy
+│   │   ├── repo.py                         # функции доступа к данным
+│   │   ├── schemas.py                      # Pydantic-схемы (DTO для API/тестов)
+│   │   └── utils.py                        # утилиты (валидации, парсинг и т.д.)
+│   │
+│   ├── data/                               # данные проекта
+│   │   └── bot.db                          # SQLite-база
+│   │
+│   ├── tests/                              # тесты
+│   │   └── ...                             # unit/integration tests
+│   │
+│   ├── run.py                              # точка входа (polling)
+│   └── run_with_init.py                    # запуск с пересозданием БД (опционально)
+│
+├── launchApp/                              # Flask-панель управления ботом
+│   └── webapp.py                           # веб-приложение с кнопками «Запуск/Стоп»
+│
+├── requirements.txt                        # зависимости (flask, ptb, sqlalchemy, loguru…)
+├── .env                                    # переменные окружения (BOT_TOKEN, ADMIN_IDS, DB_DSN)
+└── README.md                               # описание проекта
