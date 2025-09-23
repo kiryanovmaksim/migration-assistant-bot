@@ -48,12 +48,14 @@ async def _on_startup(app: Application) -> None:
 
 def admin_only(func: Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]):
     """Декоратор для админ-команд по списку ID из .env (ADMIN_IDS)."""
+
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = update.effective_user.id if update.effective_user else 0
         if not is_admin(uid, settings.ADMIN_IDS):
             await update.effective_message.reply_text("Только для администраторов.")
             return
         return await func(update, context)
+
     return wrapper
 
 
@@ -293,7 +295,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     else:
                         await repo.submit_response(db, resp.id)
                         clear_state(update.effective_user.id)
-                        await update.message.reply_text("Спасибо! Анкета отправлена.", reply_markup=ReplyKeyboardRemove())
+                        await update.message.reply_text("Спасибо! Анкета отправлена.",
+                                                        reply_markup=ReplyKeyboardRemove())
                     return
                 else:
                     # Проверяем, что это допустимый вариант
@@ -326,10 +329,53 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("Команда не распознана. Используйте /start.")
 
 
+# ---------------------------- auth commands -----------------------------
+from .utils import parse_meeting_form, is_admin, require_login
+
+
+async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) < 2:
+        await update.message.reply_text("Использование: /login <username> <password>")
+        return
+
+    username, password = context.args[0], context.args[1]
+
+    async with SessionLocal() as db:
+        user = await repo.authenticate_user(db, username, password)
+        if not user:
+            await update.message.reply_text("❌ Неверный логин или пароль")
+            return
+
+        await repo.set_active_session(db, update.effective_user.id, user.id)
+        await update.message.reply_text(f"✅ Успешный вход. Ваша роль: {user.role.name}")
+
+
+@require_login
+async def logout_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with SessionLocal() as db:
+        await repo.logout(db, update.effective_user.id)
+    await update.message.reply_text("ℹ️ Вы вышли из системы")
+
+
+@require_login
+async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with SessionLocal() as db:
+        user = await repo.get_active_user(db, update.effective_user.id)
+        if user:
+            await update.message.reply_text(f"👤 Вы вошли как {user.username}, роль: {user.role.name}")
+        else:
+            await update.message.reply_text("⚠️ Вы не вошли в систему")
+
+
 # ---------------------------- app factory -----------------------------
 
 def build_app() -> Application:
     app = Application.builder().token(settings.BOT_TOKEN).build()
+
+    # auth
+    app.add_handler(CommandHandler("login", login_cmd))
+    app.add_handler(CommandHandler("logout", logout_cmd))
+    app.add_handler(CommandHandler("whoami", whoami_cmd))
 
     # user
     app.add_handler(CommandHandler("start", start_cmd))
