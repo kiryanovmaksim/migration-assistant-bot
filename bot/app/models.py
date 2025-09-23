@@ -45,7 +45,9 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    telegram_id: Mapped[int] = mapped_column(unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)  # NEW
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)      # NEW
+    telegram_id: Mapped[int | None] = mapped_column(nullable=True, index=True)         # теперь nullable
     fio: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role_id: Mapped[int | None] = mapped_column(ForeignKey("roles.id"))
@@ -53,6 +55,16 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     role: Mapped["Role"] = relationship()
+
+
+class TgSession(Base):
+    __tablename__ = "tg_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    telegram_id: Mapped[int] = mapped_column(index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 class Meeting(Base):
