@@ -1,5 +1,5 @@
 # run.py
-from app.bot import build_app
+from bot.app.bot import build_app
 
 
 def main():

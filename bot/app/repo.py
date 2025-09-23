@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 from datetime import datetime
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from passlib.hash import bcrypt
@@ -63,12 +63,28 @@ async def create_user(
     return u
 
 
-async def authenticate_user(db: AsyncSession, username: str, password: str) -> User | None:
-    res = await db.execute(select(User).where(User.username == username, User.is_active == True))
-    u = res.scalar_one_or_none()
-    if not u or not u.password_hash or not bcrypt.verify(password, u.password_hash):
-        return None
-    return u
+from sqlalchemy.orm import joinedload
+
+async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[User]:
+    result = await db.execute(
+        select(User)
+        .options(joinedload(User.role))
+        .where(User.username == username)
+    )
+    user = result.scalar_one_or_none()
+    if user and bcrypt.verify(password, user.password_hash):
+        return user
+    return None
+
+async def get_active_user(db: AsyncSession, telegram_id: int) -> Optional[User]:
+    result = await db.execute(
+        select(User)
+        .options(joinedload(User.role))
+        .join(Session, Session.user_id == User.id)
+        .where(Session.telegram_id == telegram_id, Session.is_active == True)
+    )
+    return result.scalar_one_or_none()
+
 
 
 # -------- sessions --------
