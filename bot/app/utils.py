@@ -2,11 +2,59 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional, Iterable
+from typing import Optional, Iterable, Callable, Any
+from functools import wraps
 
+from telegram import Update
+from telegram.ext import ContextTypes
+
+from .db import SessionLocal
+from . import repo
+
+
+# ---------- Проверка ролей / авторизации ----------
+
+async def get_current_user(telegram_id: int):
+    """Получить активного пользователя по telegram_id или None"""
+    async with SessionLocal() as db:
+        return await repo.get_active_user(db, telegram_id)
+
+
+def require_login(handler: Callable) -> Callable:
+    """Декоратор: пускает только авторизованных пользователей"""
+    @wraps(handler)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        telegram_id = update.effective_user.id
+        user = await get_current_user(telegram_id)
+        if not user:
+            await update.message.reply_text("❌ Вы не авторизованы. Используйте команду /login.")
+            return
+        return await handler(update, context, *args, **kwargs)
+    return wrapper
+
+
+def require_role(role_name: str):
+    """Декоратор: пускает только пользователей с указанной ролью"""
+    def decorator(handler: Callable) -> Callable:
+        @wraps(handler)
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+            telegram_id = update.effective_user.id
+            user = await get_current_user(telegram_id)
+            if not user:
+                await update.message.reply_text("❌ Вы не авторизованы. Используйте команду /login.")
+                return
+            if not user.role or user.role.name != role_name:
+                await update.message.reply_text(f"⚠️ Недостаточно прав: требуется роль «{role_name}».")
+                return
+            return await handler(update, context, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+# ---------- Старый код (оставляем) ----------
 
 def is_admin(user_id: int, admin_ids: Iterable[int]) -> bool:
-    """Проверка прав администратора по списку ID из .env."""
+    """Проверка прав администратора по списку ID из .env (устаревшее решение)."""
     try:
         return int(user_id) in set(int(x) for x in admin_ids)
     except Exception:
@@ -40,16 +88,6 @@ def parse_meeting_form(text: str):
 
     Ожидаемый формат (пайп-разделитель):
         Title | Description | Department | Country | Deadline
-
-    Примеры даты:
-        2025-09-30
-        2025-09-30 18:30
-        30.09.2025
-        (пусто) — без дедлайна
-
-    Возвращает кортеж:
-        (title: str, description: Optional[str], department: Optional[str],
-         country: Optional[str], deadline_at: Optional[datetime])
     """
     parts = [p.strip() for p in (text or "").split("|")]
     while len(parts) < 5:
@@ -62,7 +100,6 @@ def parse_meeting_form(text: str):
     deadline_at = _try_parse_datetime(parts[4])
 
     if not title:
-        # минимальная защита: не даём создать встречу без заголовка
         title = "Untitled meeting"
 
     return title, description, department, country, deadline_at
