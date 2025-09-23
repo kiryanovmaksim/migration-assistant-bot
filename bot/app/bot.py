@@ -11,31 +11,19 @@ Telegram bot: встречи/опросы с ролями и БД.
 """
 
 from __future__ import annotations
-from typing import Callable, Awaitable
+
 import io
 import json
+from typing import Awaitable, Callable
+
 from loguru import logger
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-    KeyboardButton,
-    InputFile,
-)
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram import (InputFile, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update)
+from telegram.ext import (Application, CommandHandler, ContextTypes, MessageHandler, filters)
 
 from .config import settings
-from .db import init_db, SessionLocal
-from . import repo
+from .db import init_db
+from .fsm import advance, clear_state, get_state, start_fill
 from .models import MeetingStatus, QuestionType
-from .fsm import start_fill, get_state, advance, clear_state
-from .utils import parse_meeting_form, is_admin
 
 
 # ---------------------------- infra -----------------------------
@@ -367,6 +355,73 @@ async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text("⚠️ Вы не вошли в систему")
 
 
+# ---------------------------- role management -----------------------------
+from .utils import require_role
+from .db import SessionLocal
+from . import repo
+
+
+@require_role("Администратор")
+async def roles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async with SessionLocal() as db:
+        roles = await repo.list_roles(db)
+        if not roles:
+            await update.message.reply_text("Ролей нет.")
+            return
+        text = "\n".join(f"{r.id}: {r.name}" for r in roles)
+        await update.message.reply_text(f"Список ролей:\n{text}")
+
+
+@require_role("Администратор")
+async def addrole_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Использование: /addrole <название>")
+        return
+    name = " ".join(context.args)
+    async with SessionLocal() as db:
+        role = await repo.create_role(db, name)
+        await update.message.reply_text(f"✅ Роль создана: {role.id} → {role.name}")
+
+
+@require_role("Администратор")
+async def renamerole_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        await update.message.reply_text("Использование: /renamerole <id> <новое название>")
+        return
+    role_id, new_name = context.args[0], " ".join(context.args[1:])
+    async with SessionLocal() as db:
+        await repo.rename_role(db, int(role_id), new_name)
+        await update.message.reply_text(f"✏️ Роль {role_id} переименована в {new_name}")
+
+
+@require_role("Администратор")
+async def delrole_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Использование: /delrole <id>")
+        return
+    role_id = int(context.args[0])
+    async with SessionLocal() as db:
+        ok = await repo.delete_role(db, role_id)
+        if ok:
+            await update.message.reply_text(f"🗑 Роль {role_id} удалена.")
+        else:
+            await update.message.reply_text("⚠️ Невозможно удалить роль — она используется пользователями.")
+
+
+@require_role("Администратор")
+async def setrole_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        await update.message.reply_text("Использование: /setrole <username> <role_id>")
+        return
+    username, role_id = context.args[0], int(context.args[1])
+    async with SessionLocal() as db:
+        ok = await repo.set_user_role(db, username, role_id)
+        if ok:
+            await update.message.reply_text(f"✅ Пользователю {username} назначена роль {role_id}.")
+        else:
+            await update.message.reply_text("❌ Пользователь не найден.")
+
+
 # ---------------------------- app factory -----------------------------
 
 def build_app() -> Application:
@@ -387,6 +442,13 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("open_meeting", open_meeting_cmd))
     app.add_handler(CommandHandler("close_meeting", close_meeting_cmd))
     app.add_handler(CommandHandler("export", export_cmd))
+
+    # role management (только админ)
+    app.add_handler(CommandHandler("roles", roles_cmd))
+    app.add_handler(CommandHandler("addrole", addrole_cmd))
+    app.add_handler(CommandHandler("renamerole", renamerole_cmd))
+    app.add_handler(CommandHandler("delrole", delrole_cmd))
+    app.add_handler(CommandHandler("setrole", setrole_cmd))
 
     # text flow
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
