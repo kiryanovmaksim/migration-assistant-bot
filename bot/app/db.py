@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import select
@@ -12,7 +13,23 @@ from .config import settings
 
 # ---------- Engine & Session ----------
 
-engine = create_async_engine(settings.DB_DSN, echo=False, future=True)
+# Выбираем строку подключения:
+# - если запускаем pytest (PYTEST_CURRENT_TEST есть в окружении) → DB_DSN_TEST
+# - иначе → DB_DSN (боевой/разработческий режим)
+if "PYTEST_CURRENT_TEST" in os.environ:
+    dsn = os.getenv("DB_DSN_TEST")
+else:
+    dsn = os.getenv("DB_DSN", "sqlite+aiosqlite:///./data/bot.db")
+
+if dsn and dsn.startswith("sqlite+aiosqlite:///"):
+    raw_path = dsn.replace("sqlite+aiosqlite:///", "")
+    # путь всегда от корня проекта
+    project_root = Path(__file__).resolve().parents[2]  # подняться до корня
+    abs_path = (project_root / raw_path).resolve()
+    dsn = f"sqlite+aiosqlite:///{abs_path}"
+
+
+engine = create_async_engine(dsn, echo=False, future=True)
 
 SessionLocal = async_sessionmaker(
     bind=engine,
@@ -26,15 +43,15 @@ class Base(DeclarativeBase):
     pass
 
 
-# ---------- Init ----------
+# ---------- Init DB ----------
 
 async def init_db() -> None:
     """
-    Создаёт таблицы при первом запуске без ручных SQL-скриптов.
-    Для SQLite дополнительно гарантирует наличие папки data/.
+    Создаёт таблицы при первом запуске и выполняет сидинг.
+    Для SQLite дополнительно гарантирует наличие каталога data/.
     """
-    if settings.DB_DSN.startswith("sqlite+aiosqlite:///"):
-        db_path = settings.DB_DSN.split("sqlite+aiosqlite:///")[1]
+    if dsn.startswith("sqlite+aiosqlite:///"):
+        db_path = dsn.replace("sqlite+aiosqlite:///", "")
         db_dir = os.path.dirname(db_path)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
@@ -47,14 +64,14 @@ async def init_db() -> None:
     await seed_defaults()
 
 
-# ---------- Seed ----------
+# ---------- Seed data ----------
 
 async def seed_defaults() -> None:
     """Создание базовых ролей и администратора"""
     from .models import Role, User
 
     async with SessionLocal() as s:
-        # Роли
+        # роли
         roles = (await s.execute(select(Role))).scalars().all()
         if not roles:
             s.add_all([
@@ -64,7 +81,7 @@ async def seed_defaults() -> None:
             ])
             await s.commit()
 
-        # Админ
+        # админ
         if settings.ADMIN_USERNAME:
             res = await s.execute(select(User).where(User.username == settings.ADMIN_USERNAME))
             admin = res.scalar_one_or_none()
