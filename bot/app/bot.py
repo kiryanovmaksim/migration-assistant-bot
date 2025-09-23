@@ -16,105 +16,7 @@ from . import repo
 from .utils import parse_meeting_form, require_login, require_role
 
 
-# ---------------------------- user commands -----------------------------
-
-@require_login
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("👋 Добро пожаловать! Используйте /login для входа.")
-
-
-@require_login
-async def my_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    async with SessionLocal() as db:
-        user = await repo.get_active_user(db, update.effective_user.id)
-        if user:
-            await update.message.reply_text(f"👤 {user.username}, роль: {user.role.name}")
-        else:
-            await update.message.reply_text("⚠️ Вы не авторизованы.")
-
-
-# ---------------------------- meeting commands (admin only) -----------------------------
-
-@require_role("Администратор")
-async def new_meeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = " ".join(context.args)
-    if not text:
-        await update.message.reply_text("Использование: /new_meeting Title | Description | Department | Country | Deadline")
-        return
-
-    title, description, department, country, deadline_at = parse_meeting_form(text)
-
-    async with SessionLocal() as db:
-        meeting = await repo.create_meeting(db, title, description, department, country, deadline_at)
-        await update.message.reply_text(f"✅ Встреча создана (id={meeting.id})")
-
-
-@require_role("Администратор")
-async def add_q_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if len(context.args) < 2:
-        await update.message.reply_text("Использование: /add_q <meeting_id> <текст вопроса>")
-        return
-
-    meeting_id = int(context.args[0])
-    text = " ".join(context.args[1:])
-
-    async with SessionLocal() as db:
-        q = await repo.add_question(db, meeting_id, text)
-        if q:
-            await update.message.reply_text(f"➕ Вопрос добавлен (id={q.id})")
-        else:
-            await update.message.reply_text("❌ Встреча не найдена.")
-
-
-@require_role("Администратор")
-async def open_meeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args:
-        await update.message.reply_text("Использование: /open_meeting <meeting_id>")
-        return
-
-    meeting_id = int(context.args[0])
-
-    async with SessionLocal() as db:
-        ok = await repo.set_meeting_status(db, meeting_id, is_open=True)
-        if ok:
-            await update.message.reply_text("✅ Встреча открыта.")
-        else:
-            await update.message.reply_text("❌ Встреча не найдена.")
-
-
-@require_role("Администратор")
-async def close_meeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args:
-        await update.message.reply_text("Использование: /close_meeting <meeting_id>")
-        return
-
-    meeting_id = int(context.args[0])
-
-    async with SessionLocal() as db:
-        ok = await repo.set_meeting_status(db, meeting_id, is_open=False)
-        if ok:
-            await update.message.reply_text("✅ Встреча закрыта.")
-        else:
-            await update.message.reply_text("❌ Встреча не найдена.")
-
-
-@require_role("Администратор")
-async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args:
-        await update.message.reply_text("Использование: /export <meeting_id>")
-        return
-
-    meeting_id = int(context.args[0])
-
-    async with SessionLocal() as db:
-        csv_bytes = await repo.export_meeting_csv(db, meeting_id)
-        if csv_bytes:
-            await update.message.reply_document(document=csv_bytes, filename=f"meeting_{meeting_id}.csv")
-        else:
-            await update.message.reply_text("❌ Встреча не найдена или пуста.")
-
-
-# ---------------------------- auth commands -----------------------------
+# ---------------------------- auth -----------------------------
 
 async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) < 2:
@@ -150,76 +52,246 @@ async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text("⚠️ Вы не вошли в систему")
 
 
-# ---------------------------- role management (admin only) -----------------------------
+# ---------------------------- user commands -----------------------------
+
+@require_login
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("👋 Добро пожаловать! Используйте /login для входа.")
+
+
+@require_login
+async def my_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with SessionLocal() as db:
+        user = await repo.get_active_user(db, update.effective_user.id)
+        if user:
+            await update.message.reply_text(f"👤 {user.username}, роль: {user.role.name}")
+        else:
+            await update.message.reply_text("⚠️ Вы не авторизованы.")
+
+
+# ---------------------------- meetings -----------------------------
+
+@require_login
+async def meetings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with SessionLocal() as db:
+        meetings = await repo.list_meetings(db)
+        if not meetings:
+            await update.message.reply_text("Встреч нет.")
+            return
+        text = "\n".join(f"{m.id}: {m.title} [{m.status}]" for m in meetings)
+        await update.message.reply_text(f"📅 Встречи:\n{text}")
+
+
+@require_role("Модератор")
+async def newmeeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = " ".join(context.args)
+    if not text:
+        await update.message.reply_text("Использование: /newmeeting Title | Desc | Dept | Country | Deadline")
+        return
+
+    title, description, department, country, deadline_at = parse_meeting_form(text)
+    async with SessionLocal() as db:
+        meeting = await repo.create_meeting(db, title, description, department, country, deadline_at)
+        await update.message.reply_text(f"✅ Встреча создана (id={meeting.id})")
+
+
+@require_role("Модератор")
+async def addquestion_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) < 2:
+        await update.message.reply_text("Использование: /addquestion <meeting_id> <текст>")
+        return
+    meeting_id = int(context.args[0])
+    text = " ".join(context.args[1:])
+    async with SessionLocal() as db:
+        q = await repo.add_question(db, meeting_id, text)
+        if q:
+            await update.message.reply_text(f"➕ Вопрос добавлен (id={q.id})")
+        else:
+            await update.message.reply_text("❌ Встреча не найдена.")
+
+
+@require_role("Модератор")
+async def openmeeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Использование: /openmeeting <id>")
+        return
+    meeting_id = int(context.args[0])
+    async with SessionLocal() as db:
+        ok = await repo.set_meeting_status(db, meeting_id, "open")
+        await update.message.reply_text("✅ Открыта" if ok else "❌ Не найдена")
+
+
+@require_role("Модератор")
+async def closemeeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Использование: /closemeeting <id>")
+        return
+    meeting_id = int(context.args[0])
+    async with SessionLocal() as db:
+        ok = await repo.set_meeting_status(db, meeting_id, "closed")
+        await update.message.reply_text("✅ Закрыта" if ok else "❌ Не найдена")
+
 
 @require_role("Администратор")
+async def delmeeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Использование: /delmeeting <id>")
+        return
+    meeting_id = int(context.args[0])
+    async with SessionLocal() as db:
+        ok = await repo.delete_meeting(db, meeting_id)
+        await update.message.reply_text("🗑 Удалена" if ok else "❌ Не найдена")
+
+
+@require_role("Администратор")
+async def exportmeeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Использование: /exportmeeting <id>")
+        return
+    meeting_id = int(context.args[0])
+    async with SessionLocal() as db:
+        # здесь должна быть логика экспорта в CSV
+        await update.message.reply_text(f"📤 Экспорт встречи {meeting_id} (заглушка)")
+
+
+# ---------------------------- roles -----------------------------
+# (оставляем как было в этапе 5)
+
+# ---------------------------- misc -----------------------------
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Неизвестная команда. Используйте /help.")
+
+# команды управления ролями
 async def roles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with SessionLocal() as db:
         roles = await repo.list_roles(db)
-        if not roles:
-            await update.message.reply_text("Ролей нет.")
-            return
-        text = "\n".join(f"{r.id}: {r.name}" for r in roles)
-        await update.message.reply_text(f"Список ролей:\n{text}")
+        text = "📋 Роли:\n" + "\n".join(f"{r.id}. {r.name}" for r in roles)
+        await update.message.reply_text(text)
 
 
 @require_role("Администратор")
 async def addrole_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Использование: /addrole <название>")
+        await update.message.reply_text("⚠️ Использование: /addrole <название>")
         return
-    name = " ".join(context.args)
     async with SessionLocal() as db:
-        role = await repo.create_role(db, name)
-        await update.message.reply_text(f"✅ Роль создана: {role.id} → {role.name}")
+        r = await repo.create_role(db, context.args[0])
+        await update.message.reply_text(f"✅ Роль создана: {r.name} (id={r.id})")
 
 
 @require_role("Администратор")
 async def renamerole_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Использование: /renamerole <id> <новое название>")
+        await update.message.reply_text("⚠️ Использование: /renamerole <id> <новое название>")
         return
-    role_id, new_name = context.args[0], " ".join(context.args[1:])
+    role_id = int(context.args[0])
+    new_name = context.args[1]
     async with SessionLocal() as db:
-        await repo.rename_role(db, int(role_id), new_name)
-        await update.message.reply_text(f"✏️ Роль {role_id} переименована в {new_name}")
+        ok = await repo.rename_role(db, role_id, new_name)
+        await update.message.reply_text("✅ Роль обновлена" if ok else "❌ Роль не найдена")
 
 
 @require_role("Администратор")
 async def delrole_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Использование: /delrole <id>")
+        await update.message.reply_text("⚠️ Использование: /delrole <id>")
         return
     role_id = int(context.args[0])
     async with SessionLocal() as db:
         ok = await repo.delete_role(db, role_id)
-        if ok:
-            await update.message.reply_text(f"🗑 Роль {role_id} удалена.")
-        else:
-            await update.message.reply_text("⚠️ Невозможно удалить роль — она используется пользователями.")
+        await update.message.reply_text("✅ Роль удалена" if ok else "❌ Роль не найдена")
 
 
 @require_role("Администратор")
 async def setrole_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Использование: /setrole <username> <role_id>")
+        await update.message.reply_text("⚠️ Использование: /setrole <username> <role_id>")
         return
-    username, role_id = context.args[0], int(context.args[1])
+    username = context.args[0]
+    role_id = int(context.args[1])
     async with SessionLocal() as db:
-        ok = await repo.set_user_role(db, username, role_id)
-        if ok:
-            await update.message.reply_text(f"✅ Пользователю {username} назначена роль {role_id}.")
-        else:
-            await update.message.reply_text("❌ Пользователь не найден.")
+        u = await repo.get_user_by_username(db, username)
+        if not u:
+            await update.message.reply_text("❌ Пользователь не найден")
+            return
+        u.role_id = role_id
+        await db.commit()
+        await update.message.reply_text(f"✅ Пользователь {username} теперь имеет роль {role_id}")
 
 
-# ---------------------------- text flow -----------------------------
+from telegram import ReplyKeyboardMarkup
+# остальное у тебя уже есть
 
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Неизвестная команда. Используйте /help.")
+# ---------------------------- menu -----------------------------
+
+COMMANDS_BY_ROLE = {
+    "Администратор": [
+        "/roles", "/addrole", "/renamerole", "/delrole", "/setrole",
+        "/meetings", "/newmeeting", "/addquestion", "/openmeeting", "/closemeeting",
+        "/delmeeting", "/exportmeeting",
+        "/questions", "/answer",
+        "/whoami", "/logout",
+    ],
+    "Модератор": [
+        "/meetings", "/newmeeting", "/addquestion", "/openmeeting", "/closemeeting",
+        "/questions", "/answer",
+        "/whoami", "/logout",
+    ],
+    "Участник": [
+        "/meetings", "/questions", "/answer", "/whoami", "/logout",
+    ],
+}
 
 
-# ---------------------------- init / build -----------------------------
+
+@require_login
+async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with SessionLocal() as db:
+        user = await repo.get_active_user(db, update.effective_user.id)
+        if not user:
+            await update.message.reply_text("⚠️ Вы не авторизованы")
+            return
+
+        role = user.role.name
+        commands = COMMANDS_BY_ROLE.get(role, ["/meetings", "/logout"])
+        # делим список на строки по 2 кнопки
+        keyboard = [[cmd for cmd in commands[i:i + 2]] for i in range(0, len(commands), 2)]
+
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text(
+            f"📋 Доступные команды для роли *{role}*:",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+
+# показать вопросы встречи
+@require_login
+async def questions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, db: AsyncSession, user: User):
+    if not context.args:
+        await update.message.reply_text("❌ Укажите ID встречи: /questions <meeting_id>")
+        return
+    meeting_id = int(context.args[0])
+    questions = await repo.list_questions(db, meeting_id)
+    if not questions:
+        await update.message.reply_text("Нет вопросов для этой встречи.")
+    else:
+        text = "\n".join([f"{q.id}. {q.text}" for q in questions])
+        await update.message.reply_text(f"Вопросы встречи {meeting_id}:\n{text}")
+
+# ответить на вопрос
+@require_login
+async def answer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, db: AsyncSession, user: User):
+    if len(context.args) < 2:
+        await update.message.reply_text("❌ Используйте: /answer <question_id> <текст>")
+        return
+    qid = int(context.args[0])
+    text = " ".join(context.args[1:])
+    await repo.add_answer(db, user.id, qid, text)
+    await update.message.reply_text("✅ Ответ сохранён")
+
+
+# ---------------------------- init -----------------------------
 
 async def _on_startup(app: Application) -> None:
     from .db import init_db
@@ -238,30 +310,36 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("my", my_cmd))
 
-    # admin meetings
-    app.add_handler(CommandHandler("new_meeting", new_meeting_cmd))
-    app.add_handler(CommandHandler("add_q", add_q_cmd))
-    app.add_handler(CommandHandler("open_meeting", open_meeting_cmd))
-    app.add_handler(CommandHandler("close_meeting", close_meeting_cmd))
-    app.add_handler(CommandHandler("export", export_cmd))
+    # meetings
+    app.add_handler(CommandHandler("meetings", meetings_cmd))
+    app.add_handler(CommandHandler("newmeeting", newmeeting_cmd))
+    app.add_handler(CommandHandler("addquestion", addquestion_cmd))
+    app.add_handler(CommandHandler("openmeeting", openmeeting_cmd))
+    app.add_handler(CommandHandler("closemeeting", closemeeting_cmd))
+    app.add_handler(CommandHandler("delmeeting", delmeeting_cmd))
+    app.add_handler(CommandHandler("exportmeeting", exportmeeting_cmd))
 
-    # role management
+    # roles (из этапа 5)
     app.add_handler(CommandHandler("roles", roles_cmd))
     app.add_handler(CommandHandler("addrole", addrole_cmd))
     app.add_handler(CommandHandler("renamerole", renamerole_cmd))
     app.add_handler(CommandHandler("delrole", delrole_cmd))
     app.add_handler(CommandHandler("setrole", setrole_cmd))
 
-    # text flow
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_handler(CommandHandler("questions", questions_cmd))
+    app.add_handler(CommandHandler("answer", answer_cmd))
 
-    # init hook
+    # misc
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    # menu
+    app.add_handler(CommandHandler("menu", menu_cmd))
     app.post_init = _on_startup
     return app
 
 
 async def run() -> None:
     app = build_app()
+
     await app.run_polling()
 
 

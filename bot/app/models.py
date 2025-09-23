@@ -22,6 +22,8 @@ class MeetingStatus(enum.Enum):
     draft = "draft"
     open = "open"
     closed = "closed"
+    scheduled = "scheduled"
+
 
 
 class QuestionType(enum.Enum):
