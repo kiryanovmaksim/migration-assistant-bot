@@ -1,24 +1,17 @@
-# launchApp.py
-import os
-import sys
-import asyncio
+from flask import Flask
 
-# Убедимся, что видим проект
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
+# Создаём Flask-приложение
+app = Flask(__name__)
 
-from bot.app.bot import build_app
+@app.route("/")
+def index():
+    return "🤖 Bot WebApp is running!"
 
+@app.route("/ping")
+def ping():
+    return "pong"
 
-async def main():
-    print("🤖 Bot is running on PythonAnywhere... Press Ctrl+C to stop.")
-    app = build_app()
-    await app.run_polling()
-
-
+# Локальный запуск
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Bot stopped.")
+    # локально можно зайти на http://127.0.0.1:5000/
+    app.run(host="0.0.0.0", port=5000, debug=True)
