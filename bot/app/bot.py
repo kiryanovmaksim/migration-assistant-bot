@@ -290,6 +290,40 @@ async def answer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, db: Asy
     await repo.add_answer(db, user.id, qid, text)
     await update.message.reply_text("✅ Ответ сохранён")
 
+# ---------------------------- help -----------------------------
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "🤖 *TeamMeet Bot* — бот для управления командными встречами.\n\n"
+        "Доступные команды:\n"
+        "🔑 Аутентификация:\n"
+        "  /login <username> <password> — вход\n"
+        "  /logout — выход\n"
+        "  /whoami — информация о текущем пользователе\n\n"
+        "📅 Встречи:\n"
+        "  /meetings — список встреч\n"
+        "  /newmeeting <данные> — создать встречу (модератор)\n"
+        "  /addquestion <meeting_id> <текст> — добавить вопрос (модератор)\n"
+        "  /openmeeting <id> — открыть встречу (модератор)\n"
+        "  /closemeeting <id> — закрыть встречу (модератор)\n"
+        "  /delmeeting <id> — удалить встречу (админ)\n"
+        "  /exportmeeting <id> — экспорт встречи (админ)\n\n"
+        "❓ Вопросы:\n"
+        "  /questions <meeting_id> — список вопросов\n"
+        "  /answer <question_id> <текст> — ответить на вопрос\n\n"
+        "👥 Роли:\n"
+        "  /roles — список ролей\n"
+        "  /addrole <название> — добавить роль (админ)\n"
+        "  /renamerole <id> <название> — переименовать роль (админ)\n"
+        "  /delrole <id> — удалить роль (админ)\n"
+        "  /setrole <username> <role_id> — назначить роль (админ)\n\n"
+        "📋 Другое:\n"
+        "  /menu — показать меню\n"
+        "  /help — помощь\n\n"
+        "Автор: Кирьянов Максим"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
 
 # ---------------------------- init -----------------------------
 
@@ -331,6 +365,10 @@ def build_app() -> Application:
 
     # misc
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    # misc
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
     # menu
     app.add_handler(CommandHandler("menu", menu_cmd))
     app.post_init = _on_startup
