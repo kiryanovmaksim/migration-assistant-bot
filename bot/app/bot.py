@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+
+from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -84,15 +86,42 @@ async def meetings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 @require_role("Модератор")
 async def newmeeting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Создание новой встречи.
+    Формат: /newmeeting Title | Desc | Dept | Country | Deadline
+    Пример:
+        /newmeeting Планирование релиза | Обсуждение задач | Разработка | Россия | 2025-11-05
+    """
     text = " ".join(context.args)
     if not text:
         await update.message.reply_text("Использование: /newmeeting Title | Desc | Dept | Country | Deadline")
         return
 
-    title, description, department, country, deadline_at = parse_meeting_form(text)
+    try:
+        title, description, department, country, deadline_at = parse_meeting_form(text)
+    except ValueError as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+        return
+
     async with SessionLocal() as db:
-        meeting = await repo.create_meeting(db, title, description, department, country, deadline_at)
-        await update.message.reply_text(f"✅ Встреча создана (id={meeting.id})")
+        # получаем текущего пользователя
+        user = await repo.get_active_user(db, update.effective_user.id)
+        if not user:
+            await update.message.reply_text("⚠️ Вы не авторизованы.")
+            return
+
+        # создаём встречу с указанием автора
+        meeting = await repo.create_meeting(
+            db=db,
+            title=title,
+            description=description,
+            department=department,
+            country=country,
+            deadline_at=deadline_at,
+            created_by=user.id  # ← добавлено
+        )
+
+        await update.message.reply_text(f"✅ Встреча '{meeting.title}' создана (id={meeting.id})")
 
 
 @require_role("Модератор")
@@ -281,14 +310,34 @@ async def questions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, db: 
 
 # ответить на вопрос
 @require_login
-async def answer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, db: AsyncSession, user: User):
+async def answer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Добавить ответ на вопрос."""
     if len(context.args) < 2:
         await update.message.reply_text("❌ Используйте: /answer <question_id> <текст>")
         return
-    qid = int(context.args[0])
+
+    try:
+        qid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ ID вопроса должен быть числом.")
+        return
+
     text = " ".join(context.args[1:])
-    await repo.add_answer(db, user.id, qid, text)
-    await update.message.reply_text("✅ Ответ сохранён")
+
+    async with SessionLocal() as db:
+        # получаем текущего пользователя
+        user = await repo.get_active_user(db, update.effective_user.id)
+        if not user:
+            await update.message.reply_text("⚠️ Вы не авторизованы.")
+            return
+
+        # сохраняем ответ
+        answer = await repo.add_answer(db, user.id, qid, text)
+        if not answer:
+            await update.message.reply_text("❌ Не удалось сохранить ответ.")
+        else:
+            await update.message.reply_text("✅ Ответ сохранён успешно.")
+
 
 # ---------------------------- help -----------------------------
 
@@ -323,6 +372,75 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Автор: Кирьянов Максим"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
+
+# ---------------------------- exportjson -----------------------------
+
+import json
+import os
+from io import BytesIO
+from telegram import InputFile
+from sqlalchemy import select
+
+
+@require_login
+async def exportjson_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, db: AsyncSession, user: User):
+    """
+    Экспорт всех встреч, вопросов и ответов в JSON.
+    Доступно только администратору.
+    """
+    from .models import Meeting, Question, Answer, Response
+
+    meetings_data = []
+
+    meetings = (await db.execute(select(Meeting))).scalars().all()
+    for m in meetings:
+        meeting_dict = {
+            "id": m.id,
+            "title": m.title,
+            "description": m.description,
+            "department": m.department,
+            "country": m.country,
+            "status": m.status.value if hasattr(m.status, "value") else m.status,
+            "created_at": str(m.created_at),
+            "questions": [],
+        }
+
+        questions = (await db.execute(select(Question).where(Question.meeting_id == m.id))).scalars().all()
+        for q in questions:
+            q_dict = {
+                "id": q.id,
+                "text": q.text,
+                "order_idx": q.order_idx,
+                "is_required": getattr(q, "is_required", None),
+                "answers": [],
+            }
+
+            # ищем все ответы через response + user_id
+            answers = (await db.execute(select(Answer).where(Answer.question_id == q.id))).scalars().all()
+            for a in answers:
+                response = (await db.execute(select(Response).where(Response.id == a.response_id))).scalar_one_or_none()
+                user_id = response.user_id if response else None
+                submitted_at = response.submitted_at if response else None
+
+                q_dict["answers"].append({
+                    "user_id": user_id,
+                    "value": a.value,
+                    "submitted_at": str(submitted_at) if submitted_at else None,
+                })
+
+            meeting_dict["questions"].append(q_dict)
+
+        meetings_data.append(meeting_dict)
+
+    # сериализация
+    json_data = json.dumps(meetings_data, indent=4, ensure_ascii=False)
+    json_bytes = BytesIO(json_data.encode('utf-8'))
+    json_bytes.name = "meetings_export.json"
+
+    await update.message.reply_document(
+        document=InputFile(json_bytes, filename="meetings_export.json"),
+        caption="📦 Экспорт всех встреч в формате JSON выполнен успешно."
+    )
 
 
 # ---------------------------- init -----------------------------
@@ -371,6 +489,8 @@ def build_app() -> Application:
 
     # menu
     app.add_handler(CommandHandler("menu", menu_cmd))
+    app.add_handler(CommandHandler("exportjson", exportjson_cmd))
+
     app.post_init = _on_startup
     return app
 

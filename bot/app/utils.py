@@ -69,11 +69,21 @@ def require_role(role_name: str):
     return decorator
 
 
+from datetime import datetime
+
 def parse_meeting_form(text: str):
-    """Парсинг формы создания встречи: Title | Desc | Dept | Country | Deadline"""
     parts = [p.strip() for p in text.split("|")]
-    # Заполним недостающие поля пустыми строками
-    while len(parts) < 5:
-        parts.append("")
-    title, description, department, country, deadline_at = parts[:5]
-    return title, description, department, country, deadline_at
+    if len(parts) < 5:
+        raise ValueError("Нужно 5 параметров: Title | Desc | Dept | Country | Deadline")
+
+    title, desc, dept, country, deadline_str = parts[:5]
+
+    # Преобразуем "2025-12-01" → datetime
+    try:
+        deadline = datetime.strptime(deadline_str, "%Y-%m-%d")
+    except ValueError:
+        # Если формат неверный, можно вернуть None или поднять ошибку
+        raise ValueError("⛔ Формат даты: YYYY-MM-DD (например, 2025-12-01)")
+
+    return title, desc, dept, country, deadline
+

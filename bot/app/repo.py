@@ -94,19 +94,34 @@ async def set_user_role(db: AsyncSession, username: str, role_id: int) -> bool:
 
 # -------------------- meetings --------------------
 
-async def create_meeting(db: AsyncSession, title: str, description: str, department: str, country: str, deadline_at: str) -> Meeting:
-    m = Meeting(
-        title=title,
-        description=description,
-        department=department,
-        country=country,
+from datetime import datetime
+from .models import Meeting
+
+async def create_meeting(
+    db,
+    title: str,
+    description: str,
+    department: str,
+    country: str,
+    deadline_at,
+    created_by: int
+):
+    """Создание новой встречи"""
+    meeting = Meeting(
+        title=title.strip(),
+        description=description.strip(),
+        department=department.strip(),
+        country=country.strip(),
         deadline_at=deadline_at,
-        status="draft"
+        status="draft",
+        created_by=created_by,
+        created_at=datetime.utcnow(),
     )
-    db.add(m)
+    db.add(meeting)
     await db.commit()
-    await db.refresh(m)
-    return m
+    await db.refresh(meeting)
+    return meeting
+
 
 
 async def list_meetings(db: AsyncSession) -> List[Meeting]:
@@ -145,9 +160,35 @@ async def list_questions(db: AsyncSession, meeting_id: int) -> list[Question]:
     return result.scalars().all()
 
 # добавить ответ пользователя
+from .models import Answer, Response
+from datetime import datetime
+
 async def add_answer(db: AsyncSession, user_id: int, question_id: int, text: str) -> Answer:
-    answer = Answer(user_id=user_id, question_id=question_id, text=text)
+    """Добавляет ответ пользователя на вопрос (через Response)."""
+    # определяем встречу через вопрос
+    question = (await db.execute(select(Question).where(Question.id == question_id))).scalar_one_or_none()
+    if not question:
+        return None
+
+    # находим или создаём response для этого пользователя и встречи
+    response = (await db.execute(
+        select(Response)
+        .where(Response.user_id == user_id, Response.meeting_id == question.meeting_id)
+    )).scalar_one_or_none()
+
+    if not response:
+        response = Response(user_id=user_id, meeting_id=question.meeting_id, status="draft", submitted_at=datetime.utcnow())
+        db.add(response)
+        await db.flush()  # чтобы получить response.id без commit
+
+    # создаём ответ
+    answer = Answer(
+        response_id=response.id,
+        question_id=question_id,
+        value=text.strip(),
+    )
     db.add(answer)
     await db.commit()
     await db.refresh(answer)
     return answer
+
